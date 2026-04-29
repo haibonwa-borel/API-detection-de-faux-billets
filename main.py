@@ -8,98 +8,143 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel, Field
 
-# URL de l'image de référence sur Internet (Un véritable billet de 50 Euros HD pour l'exemple)
-REFERENCE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/50_Euro_Serie_Europa_Vorderseite.jpg/800px-50_Euro_Serie_Europa_Vorderseite.jpg"
+# Base de données (Simulation d'Internet) contenant les gabarits officiels des billets FRANC CFA (BEAC)
+# NOTE : Pour l'environnement de développement, en l'absence de liens directs pérennes vers des billets 
+# HD de FCFA, nous utilisons des URL fiables en placeholder. Remplacez-les par vos propres URL 
+# si vous disposez d'images de Franc CFA hébergées (ex: imgur, site BEAC).
+BANKNOTE_INTERNET_DB = {
+    "500": {
+        "name": "Billet de 500 Francs CFA",
+        "url": "https://picsum.photos/seed/fcfa500/800/400.jpg"
+    },
+    "1000": {
+        "name": "Billet de 1000 Francs CFA",
+        "url": "https://picsum.photos/seed/fcfa1000/800/400.jpg"
+    },
+    "2000": {
+        "name": "Billet de 2000 Francs CFA",
+        "url": "https://picsum.photos/seed/fcfa2000/800/400.jpg"
+    },
+    "5000": {
+        "name": "Billet de 5000 Francs CFA",
+        "url": "https://picsum.photos/seed/fcfa5000/800/400.jpg"
+    },
+    "10000": {
+        "name": "Billet de 10000 Francs CFA",
+        "url": "https://picsum.photos/seed/fcfa10000/800/400.jpg"
+    }
+}
 
-# Stockage pour le "cerveau" visuel OpenCV
-reference_image = None
-keypoints_ref = []
-descriptors_ref = None
+# Cache système
+internet_cache = {}
 orb = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global reference_image, keypoints_ref, descriptors_ref, orb
-    print("Démarrage de l'API / Préparation du scanner OpenCV...")
-    
-    # 1. Initialiser l'algorithme ORB (Oriented FAST and Rotated BRIEF) utilisé en Computer Vision
+    global orb
+    print("Démarrage de l'API Centrale (Zone FRANC CFA)...")
     orb = cv2.ORB_create(nfeatures=2000)
-    
-    # 2. Se connecter à Internet pour télécharger l'image officielle authentique
-    print("Téléchargement du billet de référence parfait depuis Internet...")
-    try:
-        req = urllib.request.urlopen(REFERENCE_URL)
-        arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
-        ref_color = cv2.imdecode(arr, -1)
-        
-        # 3. Traiter le gabarit
-        reference_image = cv2.cvtColor(ref_color, cv2.COLOR_BGR2GRAY)
-        
-        # 4. Extraction mathématique des points clés (les angles, filigranes) du VRAI billet
-        keypoints_ref, descriptors_ref = orb.detectAndCompute(reference_image, None)
-        print(f"Gabarit en mémoire : {len(keypoints_ref)} points géométriques extraits de wiki.")
-    except Exception as e:
-        print(f"Erreur téléchargement gabarit: {e}")
-        
     yield
     print("Arrêt de l'API.")
 
-# Instanciation de l'API
 app = FastAPI(
-    title="Détecteur de Faux Billets V3 (Vision Pro)",
-    description="Identifie la monnaie via OpenCV par mise en correspondance de pixels clés avec un gabarit venant d'Internet.",
-    version="3.0.0",
+    title="Détecteur de Faux Billets V5 (Zone FCFA - BEAC)",
+    description="Identifie le billet CFA, télécharge son gabarit, et réalise la comparaison des pixels.",
+    version="5.0.0",
     lifespan=lifespan
 )
 
+def identify_banknote_from_image(image_hsv):
+    """
+    Analyse les pics colorimétriques de la photo pour deviner de quel billet FCFA il s'agit.
+    Règles BEAC : 500=Marron, 1000=Bleu, 2000=Rouge/Rose, 5000=Vert, 10000=Violet.
+    """
+    color_ranges = {
+        "500": {"lower": np.array([10, 50, 50]), "upper": np.array([25, 255, 255])},     # Marron/Brun
+        "1000": {"lower": np.array([100, 50, 50]), "upper": np.array([130, 255, 255])},  # Bleu
+        "2000": {"lower": np.array([0, 50, 50]), "upper": np.array([10, 255, 255])},     # Rouge gamme 1
+        "2000_b": {"lower": np.array([170, 50, 50]), "upper": np.array([180, 255, 255])},# Rouge gamme 2
+        "5000": {"lower": np.array([35, 50, 50]), "upper": np.array([85, 255, 255])},    # Vert
+        "10000": {"lower": np.array([130, 50, 50]), "upper": np.array([160, 255, 255])}  # Violet
+    }
+    
+    pixels_count = {"500": 0, "1000": 0, "2000": 0, "5000": 0, "10000": 0}
+    
+    for val, bounds in color_ranges.items():
+        mask = cv2.inRange(image_hsv, bounds["lower"], bounds["upper"])
+        count = cv2.countNonZero(mask)
+        if val == "2000_b":
+            pixels_count["2000"] += count
+        else:
+            pixels_count[val] += count
+            
+    best_match = max(pixels_count, key=pixels_count.get)
+    
+    # Par défaut si peu de couleurs détectées
+    if pixels_count[best_match] < 500:
+        return "1000"
+        
+    return best_match
+
+def fetch_internet_reference(denomination: str):
+    if denomination in internet_cache:
+        return internet_cache[denomination]
+        
+    db_entry = BANKNOTE_INTERNET_DB.get(denomination)
+    if not db_entry:
+        return None, None
+        
+    print(f">> RECHERCHE INTERNET : Gabarit de référence pour {db_entry['name']}...")
+    try:
+        # Ajout d'un User-Agent (Navigateur) pour éviter le blocage "Error 403 Forbidden" de Wikipédia
+        req_obj = urllib.request.Request(
+            db_entry["url"],
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        req = urllib.request.urlopen(req_obj)
+        arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
+        img_color = cv2.imdecode(arr, -1)
+        img_gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
+        kp, des = orb.detectAndCompute(img_gray, None)
+        internet_cache[denomination] = (kp, des)
+        return kp, des
+    except Exception as e:
+        print(f"Erreur téléchargement: {e}")
+        return None, None
+
 
 # =====================================================================
-# ENDPOINT 1 : Vérification Numéro de Série + Devise
+# ENDPOINT 1 : Numéro de Série
 # =====================================================================
-
 class SerialCheckRequest(BaseModel):
-    currency: str = Field(..., description="La devise (ex: 'EUR', 'USD')")
-    serial_number: str = Field(..., description="Le numéro imprimé")
+    currency: str = Field(..., description="La devise (ex: 'XAF', 'XOF')")
+    serial_number: str = Field(...)
 
 @app.post("/api/v1/detect/serial")
 def detect_serial(request: SerialCheckRequest):
     currency = request.currency.upper()
     serial = request.serial_number.upper()
     
-    result = {
-        "is_fake": False,
-        "confidence": 100,
-        "message": ""
-    }
+    result = {"is_fake": False, "confidence": 100, "message": ""}
     
-    if currency == "EUR":
-        pattern = r"^[A-Z]{2}\d{10}$"
-        if not re.match(pattern, serial):
-            return {"is_fake": True, "message": "Format Invalide EUR (2 lettres + 10 chiffres)."}
+    # Franc CFA BEAC = XAF, BCEAO = XOF
+    if currency in ["XAF", "XOF"]:
+        if not re.match(r"^[A-Z]?\d{10,12}$", serial):
+            return {"is_fake": True, "message": "Format Invalide Franc CFA (Attendu: suite de chiffres/lettres)."}
         
-        # Checksum mock
+        # Règle mathématique pour la simulation
         if serial[-1] == '0':
-            result["is_fake"] = True
-            result["confidence"] = 85
-            result["message"] = "Somme de contrôle invalide. Billet Contrefait."
-        else:
-            result["message"] = "Le numéro de série respecte le validateur algorithmique."
+            return {"is_fake": True, "message": "Faux Billet détecté (Erreur de somme de contrôle BEAC)."}
             
-    elif currency == "USD":
-        pattern = r"^[A-Z]{2}\d{8}[A-Z]?$"
-        if not re.match(pattern, serial):
-            return {"is_fake": True, "message": "Format Invalide USD."}
-        result["message"] = "Série USD formellement valide."
+        result["message"] = "Numéro de série valide dans l'espace monétaire BEAC/BCEAO."
     else:
-        result["message"] = f"Pas de règle stricte pour la devise {currency}."
+        result["message"] = f"Pas de règle de checksum mathématique enregistrée pour la devise {currency}."
 
     return result
 
-
 # =====================================================================
-# ENDPOINT 2 : Reconnaissance Visuelle par Téléchargement / Comparaison
+# ENDPOINT 2 : Reconnaissance Visuelle FCFA
 # =====================================================================
-
 @app.post("/api/v1/detect/image")
 async def detect_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
@@ -110,51 +155,56 @@ async def detect_image(file: UploadFile = File(...)):
         np_arr = np.frombuffer(image_bytes, np.uint8)
         upload_color = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         upload_gray = cv2.cvtColor(upload_color, cv2.COLOR_BGR2GRAY)
+        upload_hsv = cv2.cvtColor(upload_color, cv2.COLOR_BGR2HSV)
     except Exception:
-        raise HTTPException(status_code=400, detail="Image corrompue.")
+        raise HTTPException(status_code=400, detail="Fichier corrompu.")
 
-    if descriptors_ref is None:
-         raise HTTPException(status_code=503, detail="Le gabarit internet n'a pas pu être chargé.")
+    # 1. Deviner le type de billet CFA selon la colorimétrie
+    denomination = identify_banknote_from_image(upload_hsv)
+    info_billet = BANKNOTE_INTERNET_DB[denomination]
+    
+    # 2. Chercher sur le web la référence
+    kp_ref, des_ref = fetch_internet_reference(denomination)
+    
+    if des_ref is None:
+         raise HTTPException(status_code=503, detail="Réseau inaccessible : Impossible de contacter la BEAC.")
 
-    # 1. Extraction des caractéristiques de l'image postée dans l'API
+    # 3. Extraction (Uploaded Image)
     kp_upload, des_upload = orb.detectAndCompute(upload_gray, None)
 
     if des_upload is None or len(des_upload) < 10:
         return {
             "filename": file.filename,
-            "match_points_found": 0,
+            "etapes": {"identification": "Echec", "comparaison": "Impossible"},
             "is_fake": True,
-            "message": "SUSPECT : Impossible de calculer la géométrie du billet."
+            "message": "Erreur visuelle : Signature géométrique illisible (floue ou objet incongru)."
         }
 
-    # 2. Création du moteur de comparaison (Brute Force Matcher de OpenCV)
+    # 4. Comparaison BFMatcher
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(des_upload, des_ref)
     
-    # 3. L'intelligence est ici : est-ce que les points de l'UPLOAD se superposent à INTERNET ?
-    matches = bf.match(des_upload, descriptors_ref)
-    
-    # Trier par similarité (la plus petite distance)
     matches = sorted(matches, key=lambda x: x.distance)
     total_matches = len(matches)
     
-    # Fixer la limite d'authenticité pour le TP 
-    # (Un nombre de correspondances élevé = même objet)
     THRESHOLD_AUTHENTIC = 60
     
     is_fake = True
     if total_matches >= THRESHOLD_AUTHENTIC:
         is_fake = False
-        message = f"POSITIF: {total_matches} empreintes géométriques valides correspondant au gabarit officiel Internet."
+        message = f"AUTHENTIQUE : Empreintes géométriques valides confortées par le standard {info_billet['name']} BEAC."
     elif total_matches >= (THRESHOLD_AUTHENTIC / 2):
-        message = f"INDÉTERMINÉ: {total_matches} correspondances. Contrefaçon ou scan de mauvaise qualité."
+        message = f"INDÉTERMINÉ : Seulement {total_matches} correspondances. Contrefaçon légère ou mauvais scan."
     else:
-        message = f"FAUX : Échec du mapping ({total_matches} points). Les caractéristiques visuelles ne correspondent pas du tout."
+        message = f"FAUSSAIRE RECONNU : Échec du mapping ({total_matches} points). Ce n'est pas un vrai {info_billet['name']} !"
 
     return {
         "filename": file.filename,
-        "algo_details": "OpenCV ORB Feature Matching",
-        "match_points_found": total_matches,
-        "points_requis_minimaux": THRESHOLD_AUTHENTIC,
+        "workflow": {
+            "1_identification": f"Deviné algorithmiquement comme un {info_billet['name']}",
+            "2_internet_search": f"Gabarit officiel BEAC téléchargé avec succès.",
+            "3_comparaison_orb": f"{total_matches} empreintes certifiées (Minimum requis: {THRESHOLD_AUTHENTIC})"
+        },
         "is_fake": is_fake,
         "message": message
     }

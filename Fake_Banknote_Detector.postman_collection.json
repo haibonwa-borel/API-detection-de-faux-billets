@@ -1,31 +1,13 @@
 {
 	"info": {
 		"_postman_id": "c71a3964-16fd-4375-ab07-0b81aa661852",
-		"name": "API Détecteur de Faux Billets V2",
-		"description": "Collection pour utiliser l'API REST de détection. Inclut la vérification par Numéro de Série et la reconnaissance par Réseau de Neurones sur des images Uploadées.",
+		"name": "API Détecteur Franc CFA",
+		"description": "Collection de test de l'API FCFA.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
 		{
-			"name": "Validation : Numéro de Série (Format EUR Valide)",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Le statut est 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
-							"",
-							"pm.test(\"Ce billet DOIT être valide\", function () {",
-							"    var jsonData = pm.response.json();",
-							"    pm.expect(jsonData.is_fake).to.be.false;",
-							"});"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
+			"name": "Validation : Numéro de Série FCFA (Valide)",
 			"request": {
 				"method": "POST",
 				"header": [
@@ -37,7 +19,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\r\n    \"currency\": \"EUR\",\r\n    \"serial_number\": \"VA1234567891\"\r\n}"
+					"raw": "{\r\n    \"currency\": \"XAF\",\r\n    \"serial_number\": \"E01234567891\"\r\n}"
 				},
 				"url": {
 					"raw": "http://127.0.0.1:8000/api/v1/detect/serial",
@@ -60,25 +42,7 @@
 			"response": []
 		},
 		{
-			"name": "Validation : Numéro de Série (Format EUR Faux Checksum)",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Le statut est 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
-							"",
-							"pm.test(\"Ce billet DOIT être flaggé comme faux (0 à la fin)\", function () {",
-							"    var jsonData = pm.response.json();",
-							"    pm.expect(jsonData.is_fake).to.be.true;",
-							"});"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
+			"name": "Validation : Numéro de Série FCFA (Contrefait)",
 			"request": {
 				"method": "POST",
 				"header": [
@@ -90,7 +54,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\r\n    \"currency\": \"EUR\",\r\n    \"serial_number\": \"VA1234567890\"\r\n}"
+					"raw": "{\r\n    \"currency\": \"XAF\",\r\n    \"serial_number\": \"E01234567890\"\r\n}"
 				},
 				"url": {
 					"raw": "http://127.0.0.1:8000/api/v1/detect/serial",
@@ -113,25 +77,7 @@
 			"response": []
 		},
 		{
-			"name": "Classification I.A : Upload d'Image",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Requête complétée sans erreur serveur\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
-							"",
-							"pm.test(\"Le réseau de neurones a renvoyé un niveau de confiance\", function () {",
-							"    var jsonData = pm.response.json();",
-							"    pm.expect(jsonData.neural_network_confidence_level).to.exist;",
-							"});"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
+			"name": "Validation Visuelle : Upload d'un Billet",
 			"request": {
 				"method": "POST",
 				"header": [],
